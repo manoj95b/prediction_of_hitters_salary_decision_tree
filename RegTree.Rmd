@@ -1,0 +1,203 @@
+---
+title: 'Predicting the salary of Hitters'
+author: "Manoj Bhandari"
+output:
+  rmarkdown::github_document 
+---
+
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE,error=FALSE}
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load(ISLR, caret, ggplot2, rpart, rpart.plot, gbm, leaps, randomForest)
+```
+
+
+```{r, warning=FALSE,error=FALSE}
+# Loading the Library and Data Set
+data("Hitters")
+```
+
+```{r, warning=FALSE,error=FALSE}
+# Converting the data set into a data frame
+hitters.df <- Hitters
+```
+
+\newpage
+
+## Remove the observations with unknown salary information.
+
+```{r, warning=FALSE,error=FALSE}
+
+#Creating a new data frame after removing all the missing salary observations
+hitters.new.df <- as.data.frame(hitters.df[complete.cases(hitters.df$Salary),])
+
+#Number of observations removed
+removed <- sum(is.na(hitters.df$Salary))
+
+```
+
+### `r removed` records were removed
+
+\newpage
+
+## Generate log-transform the salaries. 
+```{r, warning=FALSE,error=FALSE}
+log.transform <- log(hitters.new.df$Salary)
+hist(Hitters$Salary)
+hist(log.transform)
+
+```
+
+### Here, log-transformation is used to convert a highly skewed salary data into a relatively lesser skewed (normalized) data.
+
+\newpage
+
+## Create a scatterplot with Hits on the y-axis and Years on the x-axis using all the observations. Color code the observations using the log Salary variable.
+```{r, warning=FALSE,error=FALSE}
+ggplot(hitters.new.df,aes(Years,Hits)) +
+  geom_point(aes(colour = log.transform))
+
+```
+
+### According to the scatterplot and the colour scale, the log salary is higher for players with ~5+ years of experience and ~100+ hits.
+
+\newpage
+
+## Run a linear regression model of Log Salary on all the predictors using the entire dataset. Use regsubsets() function to perform best subset selection from the regression model. Identify the best model using BIC. Which predictor variables are included in this (best) model?
+```{r, warning=FALSE,error=FALSE}
+#removing salary column 
+hitters.new.df$Salary <- NULL
+
+#Adding the log.transform column to the main data frame
+hitters.new.df$LogSalary <- log.transform
+
+#running regression
+hitters.lm <- lm(LogSalary~.,data = hitters.new.df)
+
+summary(hitters.lm)
+
+
+#subset selection
+search <- regsubsets(LogSalary ~ ., data = hitters.new.df, nbest = 1, nvmax = dim(hitters.new.df)[2],
+                     method = "exhaustive")
+sum <- summary(search)
+
+sum$bic
+which.min(sum$bic)
+sum$which[(which.min(sum$bic)),]
+```
+
+### We can see that Hits, Walks and Years are the three predictor variables included in the best model.
+
+\newpage
+
+## Now create a training data set consisting of 80 percent of the observations, and a test data set consisting of the remaining observations.
+```{r, warning=FALSE,error=FALSE}
+set.seed(42) 
+# Create data partition
+partition <- createDataPartition(hitters.new.df$LogSalary, p=0.8, list = FALSE)
+
+# Create data frame with training data
+training <- hitters.new.df[partition,]
+# Create data frame with test/validation data
+validation <- hitters.new.df[-partition,]
+```
+
+\newpage
+
+## Generate a regression tree of log Salary using only Years and Hits variables from the training data set. Which players are likely to receive highest salaries according to this model? 
+```{r, warning=FALSE,error=FALSE}
+# Generate regression tree using only Years and Hits as predictors
+salary.tree <- rpart(LogSalary~ Years + Hits, training)
+summary(salary.tree)
+
+# Plot the regression tree
+rpart.plot(salary.tree)
+
+```
+
+### According to the regression tree using only years and hits, the players with more than 5 years of experience and more than 118 hits are likely to receive highest salaries. The branch with the logSalary value of 6.7 follow this rule and shows 31% of the data.
+
+\newpage
+
+## Now create a regression tree using all the variables in the training data set. Perform boosting on the training set with 1,000 trees for a range of values of the shrinkage parameter lambda. Produce a plot with different shrinkage values on the x- axis and the corresponding training set MSE on the y-axis.
+```{r, warning=FALSE,error=FALSE}
+# Generate regression tree using all the predictors
+salary.tree.1 <- rpart(LogSalary~ ., training)
+summary(salary.tree.1)
+
+# Plot the regression tree
+rpart.plot(salary.tree.1)
+           
+set.seed(42)
+
+# Generate a range of shrinkage values
+shrink.values <- seq(0.001, 0.102, by = 0.002)
+MSE = rep(NA, length(shrink.values))
+for(i in 1:length(shrink.values)){
+  boost.salary <- gbm(LogSalary~., data = training, 
+                      distribution = "gaussian", n.trees = 1000,
+                      shrinkage = shrink.values[i])
+  predictions = predict(boost.salary, training, n.trees = 1000)
+  MSE[i] = mean((predictions - training$LogSalary)^2)
+}
+
+plot(shrink.values, MSE, xlab = "Shrinkage values", ylab = "Mean Square Errors",
+     main = "Plot of Shrinkage values vs MSE for Training Dataset")
+```
+
+\newpage
+
+## Produce a plot with different shrinkage values on the x-axis and the corresponding test set MSE on the y-axis.
+```{r, warning=FALSE,error=FALSE}
+set.seed(42)
+
+# Generate a range of shrinkage values
+shrink.values <- seq(0.01, 0.2, by = 0.005)
+MSE = rep(NA, length(shrink.values))
+for(i in 1:length(shrink.values)){
+  boost.salary <- gbm(LogSalary~., data = validation, 
+                      distribution = "gaussian", n.trees = 1000,
+                      shrinkage = shrink.values[i])
+  predictions = predict(boost.salary, validation, n.trees = 1000)
+  MSE[i] = mean((predictions - validation$LogSalary)^2)
+}
+
+plot(shrink.values, MSE, xlab = "Shrinkage values", ylab = "Mean Square Errors",
+     main = "Plot of Shrinkage values vs MSE for Test Dataset")
+
+```
+
+\newpage
+
+## Which variables appear to be the most important predictors in the boosted model?
+```{r, warning=FALSE,error=FALSE}
+
+summary(boost.salary)
+
+```
+
+### The most important predictor in the boosted model is CAtBat followed by Assists and then CWalks.
+
+\newpage
+
+## Now apply bagging to the training set. What is the test set MSE for this approach?
+```{r, warning=FALSE,error=FALSE}
+
+set.seed(42)
+bag.salary <- randomForest(LogSalary~., data=training,
+                            importance = TRUE)
+
+bag.salary
+
+test.bag <- predict(bag.salary, newdata=validation)
+plot(test.bag, validation$LogSalary)
+abline(0,1)
+
+mean((test.bag-validation$LogSalary)^2)
+
+```
